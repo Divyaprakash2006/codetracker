@@ -340,4 +340,5 @@ const validateUser = async (username, credentials = {}) => {
   }
 };
 
-module.exports = { fetchUserProfile, fetchRecentSubmissions, validateUser };
+module.exports = { fetchUserProfile, fetchRecentSubmissions, validateUser, fetchSubmissionCode };
+
