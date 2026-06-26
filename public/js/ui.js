@@ -259,3 +259,115 @@ window.escapeHtml = (text) => {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 };
+
+// Render Heatmap Calendar
+window.renderHeatmapCalendar = (gridElement, monthsElement, submissionCalendarStr) => {
+  if (!gridElement || !monthsElement) return;
+
+  gridElement.innerHTML = '';
+  monthsElement.innerHTML = '';
+
+  let submissionCalendar = {};
+  try {
+    submissionCalendar = JSON.parse(submissionCalendarStr || '{}');
+  } catch (e) {
+    console.error('Failed to parse submissionCalendar', e);
+  }
+
+  // Convert submissionCalendar keys (Unix timestamps) to YYYY-MM-DD
+  const calendarMap = {};
+  for (const [timestamp, count] of Object.entries(submissionCalendar)) {
+    const d = new Date(parseInt(timestamp) * 1000);
+    const dateStr = d.getUTCFullYear() + '-' + 
+                   String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + 
+                   String(d.getUTCDate()).padStart(2, '0');
+    calendarMap[dateStr] = count;
+  }
+
+  const today = new Date();
+  const startDate = new Date();
+  startDate.setDate(today.getDate() - 365);
+
+  // Normalize dateCursor and todayUtc to UTC midnights
+  const dateCursor = new Date(Date.UTC(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(), 12, 0, 0, 0));
+  const todayUtc = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 12, 0, 0, 0));
+
+  // Determine starting weekday padding (0 = Sunday, 1 = Monday, etc.)
+  const startDay = dateCursor.getUTCDay();
+  
+  // Insert empty cells for padding
+  for (let i = 0; i < startDay; i++) {
+    const emptyCell = document.createElement('div');
+    emptyCell.className = 'heatmap-cell empty-placeholder';
+    emptyCell.style.visibility = 'hidden';
+    gridElement.appendChild(emptyCell);
+  }
+
+  const monthLabelPositions = {};
+  let currentDayIndex = startDay;
+
+  while (dateCursor <= todayUtc) {
+    const dateStr = dateCursor.getUTCFullYear() + '-' + 
+                   String(dateCursor.getUTCMonth() + 1).padStart(2, '0') + '-' + 
+                   String(dateCursor.getUTCDate()).padStart(2, '0');
+                   
+    const count = calendarMap[dateStr] || 0;
+
+    let levelClass = 'level-0';
+    if (count > 0 && count <= 2) levelClass = 'level-1';
+    else if (count >= 3 && count <= 5) levelClass = 'level-2';
+    else if (count >= 6 && count <= 10) levelClass = 'level-3';
+    else if (count >= 11) levelClass = 'level-4';
+
+    const cell = document.createElement('div');
+    cell.className = `heatmap-cell ${levelClass}`;
+    
+    // Format date for tooltip
+    const options = { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' };
+    const dateFormatted = dateCursor.toLocaleDateString('en-US', options);
+    const countText = count === 0 ? 'No submissions' : `${count} submission${count > 1 ? 's' : ''}`;
+    
+    cell.setAttribute('title', `${countText} on ${dateFormatted}`);
+    cell.setAttribute('data-bs-toggle', 'tooltip');
+    
+    gridElement.appendChild(cell);
+
+    // Track month labels
+    if (dateCursor.getUTCDate() === 1 || (dateCursor.getTime() === Date.UTC(startDate.getFullYear(), startDate.getMonth(), startDate.getDate(), 12, 0, 0, 0))) {
+      const colIndex = Math.floor(currentDayIndex / 7);
+      const monthName = dateCursor.toLocaleString('default', { month: 'short', timeZone: 'UTC' });
+      
+      // Only place label if it is far enough from previous month labels (at least 3 columns)
+      const existingLabelCols = Object.values(monthLabelPositions);
+      const isFarEnough = existingLabelCols.every(col => Math.abs(colIndex - col) > 3);
+      
+      if (isFarEnough) {
+        monthLabelPositions[monthName] = colIndex;
+      }
+    }
+
+    currentDayIndex++;
+    dateCursor.setUTCDate(dateCursor.getUTCDate() + 1);
+  }
+
+  // Render month labels
+  for (const [monthName, colIndex] of Object.entries(monthLabelPositions)) {
+    const label = document.createElement('span');
+    label.className = 'heatmap-month-label text-muted';
+    label.style.position = 'absolute';
+    label.style.left = `calc(${colIndex} * (10px + 2px))`;
+    label.textContent = monthName;
+    monthsElement.appendChild(label);
+  }
+
+  // Initialize Bootstrap tooltips
+  try {
+    const tooltipTriggerList = gridElement.querySelectorAll('[data-bs-toggle="tooltip"]');
+    tooltipTriggerList.forEach(tooltipTriggerEl => {
+      new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+  } catch (err) {
+    console.warn('Bootstrap tooltips could not be initialized:', err);
+  }
+};
+

@@ -46,6 +46,12 @@ const QUERY_USER_PROFILE = `
           submissions
         }
       }
+      userCalendar {
+        activeYears
+        streak
+        totalActiveDays
+        submissionCalendar
+      }
     }
     allQuestionsCount {
       difficulty
@@ -224,6 +230,11 @@ const fetchUserProfile = async (username, credentials = {}) => {
     const contestGlobalRanking = contest.globalRanking || null;
     const contestTopPercent = contest.topPercentage || null;
 
+    const userCalendar = user.userCalendar || {};
+    const streak = userCalendar.streak || 0;
+    const totalActiveDays = userCalendar.totalActiveDays || 0;
+    const submissionCalendar = userCalendar.submissionCalendar || '{}';
+
     return {
       username:       user.username.toLowerCase(),
       displayName:    profile.realName || user.username,
@@ -242,7 +253,10 @@ const fetchUserProfile = async (username, credentials = {}) => {
       contestCount,
       contestRating,
       contestGlobalRanking,
-      contestTopPercent
+      contestTopPercent,
+      streak,
+      totalActiveDays,
+      submissionCalendar
     };
   } catch (err) {
     console.error(`[GraphQL] Profile fetch failed for "${username}":`, err.message);

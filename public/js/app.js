@@ -268,6 +268,51 @@ window.openUserModal = async (username) => {
     const u    = res.data;
     const subs = u.submissions || [];
 
+    // Calculate calendar metrics
+    let submissionCalendar = {};
+    try {
+      submissionCalendar = JSON.parse(u.submissionCalendar || '{}');
+    } catch(e) {
+      console.error(e);
+    }
+    const calTotalSubmissions = Object.values(submissionCalendar).reduce((sum, val) => sum + val, 0);
+    const calActiveDays = u.totalActiveDays || 0;
+    const calStreak = u.streak || 0;
+    let calMaxStreak = 0;
+    try {
+      const activeDates = Object.keys(submissionCalendar).map(ts => {
+        const d = new Date(parseInt(ts) * 1000);
+        return d.getUTCFullYear() + '-' + 
+               String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + 
+               String(d.getUTCDate()).padStart(2, '0');
+      });
+      const uniqueSortedDates = [...new Set(activeDates)].sort();
+      if (uniqueSortedDates.length > 0) {
+        let tempStreak = 1;
+        let computedMax = 1;
+        for (let i = 1; i < uniqueSortedDates.length; i++) {
+          const d1 = new Date(uniqueSortedDates[i-1] + 'T00:00:00Z');
+          const d2 = new Date(uniqueSortedDates[i] + 'T00:00:00Z');
+          const diffDays = Math.round((d2 - d1) / 86400000);
+          if (diffDays === 1) {
+            tempStreak++;
+          } else if (diffDays > 1) {
+            if (tempStreak > computedMax) {
+              computedMax = tempStreak;
+            }
+            tempStreak = 1;
+          }
+        }
+        if (tempStreak > computedMax) {
+          computedMax = tempStreak;
+        }
+        calMaxStreak = computedMax;
+      }
+    } catch (e) {
+      console.error('Error calculating max streak', e);
+    }
+    const displayMaxStreak = Math.max(calMaxStreak, calStreak);
+
     const lbEntry = state.leaderboard.find(x => x.username.toLowerCase() === u.username.toLowerCase());
     const periodSolved = lbEntry ? lbEntry.periodSolved : null;
     const periodSection = periodSolved ? `
@@ -423,6 +468,49 @@ window.openUserModal = async (username) => {
         </div>
       </div>
 
+      <!-- Submission Activity Heatmap -->
+      <div class="mb-4">
+        <div class="text-uppercase text-muted fw-semibold mb-2" style="font-size:.7rem;letter-spacing:.07em">Submission Activity</div>
+        <div class="heatmap-wrapper">
+          <div class="heatmap-metrics">
+            <div class="heatmap-metric-item">
+              <div class="heatmap-metric-val">${fmtNum(calTotalSubmissions)}</div>
+              <div class="heatmap-metric-label">Submissions</div>
+            </div>
+            <div class="heatmap-metric-item border-start">
+              <div class="heatmap-metric-val">${calActiveDays}</div>
+              <div class="heatmap-metric-label">Active Days</div>
+            </div>
+            <div class="heatmap-metric-item border-start">
+              <div class="heatmap-metric-val text-success">${calStreak}</div>
+              <div class="heatmap-metric-label">Current Streak</div>
+            </div>
+            <div class="heatmap-metric-item border-start">
+              <div class="heatmap-metric-val text-danger">${displayMaxStreak}</div>
+              <div class="heatmap-metric-label">Max Streak</div>
+            </div>
+          </div>
+          
+          <div class="heatmap-scroll-container">
+            <div class="heatmap-grid-outer">
+              <div class="heatmap-weekdays">
+                <div></div>
+                <div>Mon</div>
+                <div></div>
+                <div>Wed</div>
+                <div></div>
+                <div>Fri</div>
+                <div></div>
+              </div>
+              <div class="heatmap-grid-wrapper">
+                <div class="heatmap-grid" id="modal-heatmap-grid"></div>
+                <div class="heatmap-months-row" id="modal-heatmap-months"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="mb-3">
         <div class="text-uppercase text-muted fw-semibold mb-2" style="font-size:.7rem;letter-spacing:.07em">Recent Submissions</div>
         ${submissionsListHtml}
@@ -431,6 +519,13 @@ window.openUserModal = async (username) => {
       <div class="text-end text-muted" style="font-size:.7rem">
         Last synced: ${u.lastSynced ? new Date(u.lastSynced).toLocaleString() : 'Never'}
       </div>`;
+
+    // Render the heatmap calendar
+    window.renderHeatmapCalendar(
+      document.getElementById('modal-heatmap-grid'),
+      document.getElementById('modal-heatmap-months'),
+      u.submissionCalendar
+    );
   } catch (err) {
     body.innerHTML = `<div class="empty-state-bs text-center py-5">
       <div class="empty-icon">${Icons.warn}</div>
