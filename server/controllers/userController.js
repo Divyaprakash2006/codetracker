@@ -1,26 +1,15 @@
-const { db } = require('../config/firebase');
-const {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  deleteDoc,
-  query,
-  where,
-  writeBatch
-} = require('firebase/firestore');
+const Account = require('../models/Account.model');
+const User = require('../models/User.model');
+const Submission = require('../models/Submission.model');
 const { fetchUserProfile, fetchRecentSubmissions, validateUser, fetchSubmissionCode } = require('../services/leetcodeService');
 
 const getOwnerCredentials = async (email) => {
   try {
-    const accountRef = doc(db, 'accounts', email.toLowerCase());
-    const accountSnap = await getDoc(accountRef);
-    if (accountSnap.exists()) {
-      const data = accountSnap.data();
+    const account = await Account.findOne({ email: email.toLowerCase() });
+    if (account) {
       return {
-        leetcodeSession: data.leetcodeSession || null,
-        leetcodeCsrfToken: data.leetcodeCsrfToken || null
+        leetcodeSession: account.leetcodeSession || null,
+        leetcodeCsrfToken: account.leetcodeCsrfToken || null
       };
     }
   } catch (err) {
@@ -33,18 +22,7 @@ const getOwnerCredentials = async (email) => {
 const getAllUsers = async (req, res) => {
   try {
     const owner = req.user.email;
-    const q = query(
-      collection(db, 'users'),
-      where('owner', '==', owner),
-      where('isActive', '==', true)
-    );
-    const snap = await getDocs(q);
-    const users = [];
-    snap.forEach(doc => {
-      users.push(doc.data());
-    });
-    // Sort in memory to avoid index requirements
-    users.sort((a, b) => (b.totalSolved || 0) - (a.totalSolved || 0));
+    const users = await User.find({ owner, isActive: true }).sort({ totalSolved: -1 });
     res.json({ success: true, count: users.length, data: users });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -61,12 +39,10 @@ const addUser = async (req, res) => {
 
     const clean = username.trim().toLowerCase();
     const owner = req.user.email;
-    const docId = `${owner}_${clean}`;
 
     // Check if already tracked by this owner
-    const userRef = doc(db, 'users', docId);
-    const userSnap = await getDoc(userRef);
-    if (userSnap.exists()) {
+    const userExists = await User.findOne({ owner, username: clean });
+    if (userExists) {
       return res.status(409).json({ success: false, error: `"${clean}" is already being tracked.` });
     }
 
@@ -86,28 +62,32 @@ const addUser = async (req, res) => {
       username: clean,
       owner,
       isActive: true,
-      addedAt: new Date().toISOString(),
-      lastSynced: new Date().toISOString(),
+      addedAt: new Date(),
+      lastSynced: new Date(),
       syncError: null
     };
 
-    await setDoc(userRef, userData);
+    const newUser = new User(userData);
+    await newUser.save();
 
     // Fetch and store submissions
     const submissions = await fetchRecentSubmissions(clean, 20, credentials);
     if (submissions.length > 0) {
-      const batch = writeBatch(db);
-      submissions.forEach(sub => {
-        const subId = `${owner}_${clean}_${sub.submissionId}`;
-        const subDocRef = doc(db, 'submissions', subId);
-        batch.set(subDocRef, {
-          ...sub,
-          username: clean,
-          owner,
-          timestamp: sub.timestamp instanceof Date ? sub.timestamp.toISOString() : sub.timestamp
-        });
-      });
-      await batch.commit();
+      const bulkOps = submissions.map(sub => ({
+        updateOne: {
+          filter: { owner, username: clean, submissionId: sub.submissionId },
+          update: {
+            $set: {
+              ...sub,
+              username: clean,
+              owner,
+              timestamp: sub.timestamp instanceof Date ? sub.timestamp : new Date(sub.timestamp)
+            }
+          },
+          upsert: true
+        }
+      }));
+      await Submission.bulkWrite(bulkOps);
     }
 
     res.status(201).json({ success: true, data: userData });
@@ -121,29 +101,15 @@ const removeUser = async (req, res) => {
   try {
     const username = req.params.username.toLowerCase();
     const owner = req.user.email;
-    const docId = `${owner}_${username}`;
 
-    const userRef = doc(db, 'users', docId);
-    const userSnap = await getDoc(userRef);
-    if (!userSnap.exists()) {
+    const user = await User.findOne({ owner, username });
+    if (!user) {
       return res.status(404).json({ success: false, error: `User "${username}" not found.` });
     }
-    await deleteDoc(userRef);
+    await User.deleteOne({ owner, username });
 
     // Delete all submissions for this user & owner
-    const q = query(
-      collection(db, 'submissions'),
-      where('owner', '==', owner),
-      where('username', '==', username)
-    );
-    const snap = await getDocs(q);
-    if (!snap.empty) {
-      const batch = writeBatch(db);
-      snap.forEach(doc => {
-        batch.delete(doc.ref);
-      });
-      await batch.commit();
-    }
+    await Submission.deleteMany({ owner, username });
 
     res.json({ success: true, message: `"${username}" removed from tracker.` });
   } catch (err) {
@@ -156,31 +122,18 @@ const getUserDetail = async (req, res) => {
   try {
     const username = req.params.username.toLowerCase();
     const owner = req.user.email;
-    const docId = `${owner}_${username}`;
 
-    const userRef = doc(db, 'users', docId);
-    const userSnap = await getDoc(userRef);
-    if (!userSnap.exists()) {
+    const user = await User.findOne({ owner, username });
+    if (!user) {
       return res.status(404).json({ success: false, error: 'User not found in tracker.' });
     }
-    const userData = userSnap.data();
 
     // Get submissions for user & owner
-    const q = query(
-      collection(db, 'submissions'),
-      where('owner', '==', owner),
-      where('username', '==', username)
-    );
-    const snap = await getDocs(q);
-    const submissions = [];
-    snap.forEach(doc => {
-      submissions.push(doc.data());
-    });
-    // Sort in memory
-    submissions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    const limitedSubmissions = submissions.slice(0, 20);
+    const submissions = await Submission.find({ owner, username })
+      .sort({ timestamp: -1 })
+      .limit(20);
 
-    res.json({ success: true, data: { ...userData, submissions: limitedSubmissions } });
+    res.json({ success: true, data: { ...user.toObject(), submissions } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -193,21 +146,11 @@ const getUserSubmissions = async (req, res) => {
     const owner = req.user.email;
     const limitVal = parseInt(req.query.limit) || 20;
 
-    const q = query(
-      collection(db, 'submissions'),
-      where('owner', '==', owner),
-      where('username', '==', username)
-    );
-    const snap = await getDocs(q);
-    const submissions = [];
-    snap.forEach(doc => {
-      submissions.push(doc.data());
-    });
-    // Sort in memory
-    submissions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    const limitedSubmissions = submissions.slice(0, limitVal);
+    const submissions = await Submission.find({ owner, username })
+      .sort({ timestamp: -1 })
+      .limit(limitVal);
 
-    res.json({ success: true, count: limitedSubmissions.length, data: limitedSubmissions });
+    res.json({ success: true, count: submissions.length, data: submissions });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -217,21 +160,12 @@ const getUserSubmissions = async (req, res) => {
 const syncAllUsers = async (req, res) => {
   try {
     const owner = req.user.email;
-    const q = query(
-      collection(db, 'users'),
-      where('owner', '==', owner),
-      where('isActive', '==', true)
-    );
-    const snap = await getDocs(q);
-    if (snap.empty) {
+    const users = await User.find({ owner, isActive: true });
+    if (users.length === 0) {
       return res.json({ success: true, message: 'No users to sync.', synced: 0, report: [] });
     }
 
     const report = [];
-    const users = [];
-    snap.forEach(doc => {
-      users.push(doc.data());
-    });
 
     // Load credentials for this owner
     const credentials = await getOwnerCredentials(owner);
@@ -244,45 +178,34 @@ const syncAllUsers = async (req, res) => {
         const submissions = await fetchRecentSubmissions(u.username, 20, credentials);
 
         // 2. Update user profile
-        const docId = `${owner}_${u.username}`;
-        const userRef = doc(db, 'users', docId);
-        const updatedUser = {
-          ...profile,
-          lastSynced: new Date().toISOString(),
-          syncError: null
-        };
-        await setDoc(userRef, updatedUser, { merge: true });
-
-        // 3. Keep old submissions (don't clear them) to accumulate history for period stats.
-        // Each submission is unique by document ID (owner_username_submissionId), so duplicates are avoided.
-        /*
-        const subQ = query(
-          collection(db, 'submissions'),
-          where('owner', '==', owner),
-          where('username', '==', u.username)
+        await User.updateOne(
+          { owner, username: u.username },
+          {
+            $set: {
+              ...profile,
+              lastSynced: new Date(),
+              syncError: null
+            }
+          }
         );
-        const subSnap = await getDocs(subQ);
-        if (!subSnap.empty) {
-          const deleteBatch = writeBatch(db);
-          subSnap.forEach(d => deleteBatch.delete(d.ref));
-          await deleteBatch.commit();
-        }
-        */
 
-        // 4. Insert fresh submissions
+        // 3. Insert fresh submissions
         if (submissions.length > 0) {
-          const insertBatch = writeBatch(db);
-          submissions.forEach(sub => {
-            const subId = `${owner}_${u.username}_${sub.submissionId}`;
-            const subRef = doc(db, 'submissions', subId);
-            insertBatch.set(subRef, {
-              ...sub,
-              username: u.username,
-              owner,
-              timestamp: sub.timestamp instanceof Date ? sub.timestamp.toISOString() : sub.timestamp
-            });
-          });
-          await insertBatch.commit();
+          const bulkOps = submissions.map(sub => ({
+            updateOne: {
+              filter: { owner, username: u.username, submissionId: sub.submissionId },
+              update: {
+                $set: {
+                  ...sub,
+                  username: u.username,
+                  owner,
+                  timestamp: sub.timestamp instanceof Date ? sub.timestamp : new Date(sub.timestamp)
+                }
+              },
+              upsert: true
+            }
+          }));
+          await Submission.bulkWrite(bulkOps);
         }
 
         report.push({
@@ -292,12 +215,15 @@ const syncAllUsers = async (req, res) => {
           submissions: submissions.length,
         });
       } catch (err) {
-        const docId = `${owner}_${u.username}`;
-        const userRef = doc(db, 'users', docId);
-        await setDoc(userRef, {
-          syncError: err.message,
-          lastSynced: new Date().toISOString()
-        }, { merge: true });
+        await User.updateOne(
+          { owner, username: u.username },
+          {
+            $set: {
+              syncError: err.message,
+              lastSynced: new Date()
+            }
+          }
+        );
         report.push({ username: u.username, status: 'error', error: err.message });
       }
 
@@ -319,17 +245,8 @@ const getLeaderboard = async (req, res) => {
     const owner = req.user.email;
     const { startDate, endDate, sortBy } = req.query;
 
-    const q = query(
-      collection(db, 'users'),
-      where('owner', '==', owner),
-      where('isActive', '==', true)
-    );
-    const snap = await getDocs(q);
-    const users = [];
-    snap.forEach(doc => {
-      users.push(doc.data());
-    });
-
+    const users = await User.find({ owner, isActive: true });
+    
     // Calculate period statistics if requested
     const periodSolvedMap = {};
     const hasPeriod = !!(startDate && endDate);
@@ -339,13 +256,9 @@ const getLeaderboard = async (req, res) => {
       const end = new Date(endDate);
 
       // Query all submissions for this owner and filter in memory to avoid custom indexes
-      const subQ = query(
-        collection(db, 'submissions'),
-        where('owner', '==', owner)
-      );
-      const subSnap = await getDocs(subQ);
-      subSnap.forEach(doc => {
-        const sub = doc.data();
+      const submissions = await Submission.find({ owner });
+      
+      submissions.forEach(sub => {
         const subTime = new Date(sub.timestamp);
         if (subTime >= start && subTime <= end) {
           const uName = sub.username.toLowerCase();
@@ -380,6 +293,7 @@ const getLeaderboard = async (req, res) => {
         hardTotal: u.hardTotal,
         totalQuestions: u.totalQuestions,
         activeBadge: u.activeBadge,
+        badges: u.badges || [],
         contestCount: u.contestCount,
         contestRating: u.contestRating,
         contestGlobalRanking: u.contestGlobalRanking,
@@ -431,17 +345,11 @@ const getActivityFeed = async (req, res) => {
     const limitVal = parseInt(req.query.limit) || 30;
 
     // Query submissions owned by this email
-    const q = query(collection(db, 'submissions'), where('owner', '==', owner));
-    const snap = await getDocs(q);
-    const submissions = [];
-    snap.forEach(doc => {
-      submissions.push(doc.data());
-    });
-    // Sort in memory to avoid index requirements
-    submissions.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    const limitedSubmissions = submissions.slice(0, limitVal);
+    const submissions = await Submission.find({ owner })
+      .sort({ timestamp: -1 })
+      .limit(limitVal);
 
-    res.json({ success: true, count: limitedSubmissions.length, data: limitedSubmissions });
+    res.json({ success: true, count: submissions.length, data: submissions });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -453,16 +361,7 @@ const exportReport = async (req, res) => {
     const owner = req.user.email;
     const { startDate, endDate } = req.query;
 
-    const q = query(
-      collection(db, 'users'),
-      where('owner', '==', owner),
-      where('isActive', '==', true)
-    );
-    const snap = await getDocs(q);
-    const users = [];
-    snap.forEach(doc => {
-      users.push(doc.data());
-    });
+    const users = await User.find({ owner, isActive: true });
 
     // Calculate period statistics if requested
     const periodSolvedMap = {};
@@ -473,13 +372,9 @@ const exportReport = async (req, res) => {
       const end = new Date(endDate);
 
       // Query all submissions for this owner and filter in memory to avoid custom indexes
-      const subQ = query(
-        collection(db, 'submissions'),
-        where('owner', '==', owner)
-      );
-      const subSnap = await getDocs(subQ);
-      subSnap.forEach(doc => {
-        const sub = doc.data();
+      const submissions = await Submission.find({ owner });
+      
+      submissions.forEach(sub => {
         const subTime = new Date(sub.timestamp);
         if (subTime >= start && subTime <= end) {
           const uName = sub.username.toLowerCase();
@@ -582,18 +477,16 @@ const exportReport = async (req, res) => {
 const getCredentials = async (req, res) => {
   try {
     const owner = req.user.email;
-    const accountRef = doc(db, 'accounts', owner.toLowerCase());
-    const accountSnap = await getDoc(accountRef);
-    if (!accountSnap.exists()) {
+    const account = await Account.findOne({ email: owner.toLowerCase() });
+    if (!account) {
       return res.status(404).json({ success: false, error: 'Account not found.' });
     }
-    const data = accountSnap.data();
     res.json({
       success: true,
-      hasSession: !!data.leetcodeSession,
-      hasCsrfToken: !!data.leetcodeCsrfToken,
-      leetcodeSession: data.leetcodeSession || '',
-      leetcodeCsrfToken: data.leetcodeCsrfToken || ''
+      hasSession: !!account.leetcodeSession,
+      hasCsrfToken: !!account.leetcodeCsrfToken,
+      leetcodeSession: account.leetcodeSession || '',
+      leetcodeCsrfToken: account.leetcodeCsrfToken || ''
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -606,11 +499,15 @@ const saveCredentials = async (req, res) => {
     const owner = req.user.email;
     const { leetcodeSession, leetcodeCsrfToken } = req.body;
 
-    const accountRef = doc(db, 'accounts', owner.toLowerCase());
-    await setDoc(accountRef, {
-      leetcodeSession: leetcodeSession ? leetcodeSession.trim() : null,
-      leetcodeCsrfToken: leetcodeCsrfToken ? leetcodeCsrfToken.trim() : null
-    }, { merge: true });
+    await Account.updateOne(
+      { email: owner.toLowerCase() },
+      {
+        $set: {
+          leetcodeSession: leetcodeSession ? leetcodeSession.trim() : null,
+          leetcodeCsrfToken: leetcodeCsrfToken ? leetcodeCsrfToken.trim() : null
+        }
+      }
+    );
 
     res.json({ success: true, message: 'LeetCode credentials saved successfully.' });
   } catch (err) {
@@ -629,17 +526,13 @@ const getSubmissionCode = async (req, res) => {
       return res.status(400).json({ success: false, error: 'submissionId and username are required.' });
     }
 
-    const docId = `${owner}_${username.toLowerCase()}_${submissionId}`;
-    const subRef = doc(db, 'submissions', docId);
-    const subSnap = await getDoc(subRef);
-
-    if (!subSnap.exists()) {
+    const sub = await Submission.findOne({ owner, username: username.toLowerCase(), submissionId });
+    if (!sub) {
       return res.status(404).json({ success: false, error: 'Submission record not found.' });
     }
 
-    const subData = subSnap.data();
-    if (subData.code) {
-      return res.json({ success: true, code: subData.code });
+    if (sub.code) {
+      return res.json({ success: true, code: sub.code });
     }
 
     // Load credentials for this owner
@@ -659,8 +552,8 @@ const getSubmissionCode = async (req, res) => {
       });
     }
 
-    // Cache the fetched code in Firestore
-    await setDoc(subRef, { code }, { merge: true });
+    // Cache the fetched code in MongoDB
+    await Submission.updateOne({ owner, username: username.toLowerCase(), submissionId }, { $set: { code } });
 
     res.json({ success: true, code });
   } catch (err) {

@@ -4,7 +4,12 @@ const userSchema = new mongoose.Schema({
   username: {
     type: String,
     required: true,
-    unique: true,
+    trim: true,
+    lowercase: true
+  },
+  owner: {
+    type: String,
+    required: true,
     trim: true,
     lowercase: true
   },
@@ -26,10 +31,18 @@ const userSchema = new mongoose.Schema({
   maxStreak: { type: Number, default: 0 },
   totalActiveDays: { type: Number, default: 0 },
   submissionCalendar: { type: String, default: '{}' },
+  activeBadge: { type: mongoose.Schema.Types.Mixed, default: null },
+  badges: { type: Array, default: [] },
+  contestCount: { type: Number, default: 0 },
+  contestRating: { type: Number, default: 0 },
+  contestGlobalRanking: { type: Number, default: 0 },
+  contestTopPercent: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
   lastSynced: { type: Date, default: null },
   addedAt: { type: Date, default: Date.now },
   syncError: { type: String, default: null }
 });
+
+userSchema.index({ owner: 1, username: 1 }, { unique: true });
 
 module.exports = mongoose.model('User', userSchema);

@@ -1,83 +1,77 @@
 const cron = require('node-cron');
-const { db } = require('../config/firebase');
-const {
-  collection,
-  doc,
-  getDocs,
-  setDoc,
-  query,
-  where,
-  writeBatch
-} = require('firebase/firestore');
+const Account = require('../models/Account.model');
+const User = require('../models/User.model');
+const Submission = require('../models/Submission.model');
 const { fetchUserProfile, fetchRecentSubmissions } = require('../services/leetcodeService');
 
 let isRunning = false;
 
 const syncUser = async (username, owner) => {
   try {
-    const docId = `${owner}_${username}`;
+    // Load credentials for this owner
+    const account = await Account.findOne({ email: owner.toLowerCase() });
+    const credentials = account ? {
+      leetcodeSession: account.leetcodeSession || null,
+      leetcodeCsrfToken: account.leetcodeCsrfToken || null
+    } : {};
+
     // 1. Fetch fresh data from LeetCode GraphQL
-    const profile     = await fetchUserProfile(username);
-    const submissions = await fetchRecentSubmissions(username);
+    const profile     = await fetchUserProfile(username, credentials);
+    const submissions = await fetchRecentSubmissions(username, 20, credentials);
 
-    // 2. Update user profile (upsert-style replace)
-    const userRef = doc(db, 'users', docId);
-    await setDoc(userRef, {
-      ...profile,
-      lastSynced: new Date().toISOString(),
-      syncError: null
-    }, { merge: true });
-
-    // 3. Keep old submissions (don't clear them) to accumulate history for period stats.
-    // Each submission is unique by document ID (owner_username_submissionId), so duplicates are avoided.
-    /*
-    const subQ = query(
-      collection(db, 'submissions'),
-      where('username', '==', username),
-      where('owner', '==', owner)
+    // 2. Update user profile
+    await User.updateOne(
+      { owner, username },
+      {
+        $set: {
+          ...profile,
+          lastSynced: new Date(),
+          syncError: null
+        }
+      }
     );
-    const subSnap = await getDocs(subQ);
-    if (!subSnap.empty) {
-      const deleteBatch = writeBatch(db);
-      subSnap.forEach(d => deleteBatch.delete(d.ref));
-      await deleteBatch.commit();
-    }
-    */
 
+    // 3. Insert fresh submissions using bulkWrite upserts
     if (submissions.length > 0) {
-      const insertBatch = writeBatch(db);
-      submissions.forEach(sub => {
-        const subId = `${owner}_${username}_${sub.submissionId}`;
-        const subRef = doc(db, 'submissions', subId);
-        insertBatch.set(subRef, {
-          ...sub,
-          username,
-          owner,
-          timestamp: sub.timestamp instanceof Date ? sub.timestamp.toISOString() : sub.timestamp
-        });
-      });
-      await insertBatch.commit();
+      const bulkOps = submissions.map(sub => ({
+        updateOne: {
+          filter: { owner, username, submissionId: sub.submissionId },
+          update: {
+            $set: {
+              ...sub,
+              username,
+              owner,
+              timestamp: sub.timestamp instanceof Date ? sub.timestamp : new Date(sub.timestamp)
+            }
+          },
+          upsert: true
+        }
+      }));
+      await Submission.bulkWrite(bulkOps);
     }
 
     console.log(
       `🔄 Synced: ${username} (Owner: ${owner}) | Solved: ${profile.totalSolved} | ` +
-      `Submissions cleared & reloaded: ${submissions.length}`
+      `Submissions synced: ${submissions.length}`
     );
   } catch (err) {
     console.error(`❌ Sync failed for ${username} (Owner: ${owner}): ${err.message}`);
-    const docId = `${owner}_${username}`;
-    const userRef = doc(db, 'users', docId);
-    await setDoc(userRef, {
-      syncError: err.message,
-      lastSynced: new Date().toISOString()
-    }, { merge: true }).catch(dbErr => {
-      console.error(`❌ Firestore update failed for ${username}: ${dbErr.message}`);
+    await User.updateOne(
+      { owner, username },
+      {
+        $set: {
+          syncError: err.message,
+          lastSynced: new Date()
+        }
+      }
+    ).catch(dbErr => {
+      console.error(`❌ DB update failed for ${username}: ${dbErr.message}`);
     });
   }
 };
 
 const startSyncJob = () => {
-  // Run every 2 minutes
+  // Run every 2 minutes or per config
   const interval = process.env.SYNC_INTERVAL_MINUTES || '2';
   const cronExpr = `*/${interval} * * * *`;
 
@@ -91,12 +85,7 @@ const startSyncJob = () => {
     console.log(`\n⏰ [${new Date().toLocaleTimeString()}] Starting auto-sync...`);
 
     try {
-      const q = query(collection(db, 'users'), where('isActive', '==', true));
-      const snap = await getDocs(q);
-      const users = [];
-      snap.forEach(doc => {
-        users.push(doc.data());
-      });
+      const users = await User.find({ isActive: true });
 
       if (users.length === 0) {
         console.log('   No users to sync.');
@@ -109,7 +98,7 @@ const startSyncJob = () => {
         if (user.username && user.owner) {
           await syncUser(user.username, user.owner);
         }
-        // Increased delay between requests to avoid 429 rate limiting
+        // Polite delay between requests to avoid rate limiting
         await new Promise(r => setTimeout(r, 3500));
       }
 

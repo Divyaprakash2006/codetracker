@@ -1,8 +1,13 @@
 require('dotenv').config();
+const dns = require('dns');
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder('ipv4first');
+}
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-require('./server/config/firebase');
+const connectDB = require('./server/config/db');
+connectDB();
 const apiRoutes = require('./server/routes/api');
 const { startSyncJob } = require('./server/jobs/syncJob');
 

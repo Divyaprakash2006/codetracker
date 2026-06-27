@@ -1,5 +1,5 @@
-const { db } = require('../config/firebase');
-const { doc, getDoc, setDoc, deleteDoc } = require('firebase/firestore');
+const Account = require('../models/Account.model');
+const Session = require('../models/Session.model');
 const crypto = require('crypto');
 
 // Password hashing helper
@@ -21,9 +21,8 @@ const register = async (req, res) => {
     }
 
     // Check if account already exists
-    const accountRef = doc(db, 'accounts', cleanEmail);
-    const accountSnap = await getDoc(accountRef);
-    if (accountSnap.exists()) {
+    const accountExists = await Account.findOne({ email: cleanEmail });
+    if (accountExists) {
       return res.status(409).json({ success: false, error: 'Account already exists.' });
     }
 
@@ -32,24 +31,23 @@ const register = async (req, res) => {
     const passwordHash = hashPassword(password, salt);
 
     // Save account
-    await setDoc(accountRef, {
+    const newAccount = new Account({
       email: cleanEmail,
       passwordHash,
-      salt,
-      createdAt: new Date().toISOString()
+      salt
     });
+    await newAccount.save();
 
     // Create session
     const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
-    const sessionRef = doc(db, 'sessions', token);
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-    await setDoc(sessionRef, {
+    const newSession = new Session({
       token,
       email: cleanEmail,
-      createdAt: new Date().toISOString(),
       expiresAt
     });
+    await newSession.save();
 
     res.status(201).json({ success: true, token, email: cleanEmail });
   } catch (err) {
@@ -68,13 +66,11 @@ const login = async (req, res) => {
     const cleanEmail = email.trim().toLowerCase();
 
     // Get account
-    const accountRef = doc(db, 'accounts', cleanEmail);
-    const accountSnap = await getDoc(accountRef);
-    if (!accountSnap.exists()) {
+    const account = await Account.findOne({ email: cleanEmail });
+    if (!account) {
       return res.status(401).json({ success: false, error: 'Invalid email or password.' });
     }
 
-    const account = accountSnap.data();
     const hash = hashPassword(password, account.salt);
     if (hash !== account.passwordHash) {
       return res.status(401).json({ success: false, error: 'Invalid email or password.' });
@@ -82,15 +78,14 @@ const login = async (req, res) => {
 
     // Create session
     const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
-    const sessionRef = doc(db, 'sessions', token);
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-    await setDoc(sessionRef, {
+    const newSession = new Session({
       token,
       email: cleanEmail,
-      createdAt: new Date().toISOString(),
       expiresAt
     });
+    await newSession.save();
 
     res.json({ success: true, token, email: cleanEmail });
   } catch (err) {
@@ -104,8 +99,7 @@ const logout = async (req, res) => {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split('Bearer ')[1];
-      const sessionRef = doc(db, 'sessions', token);
-      await deleteDoc(sessionRef);
+      await Session.deleteOne({ token });
     }
     res.json({ success: true, message: 'Logged out successfully.' });
   } catch (err) {

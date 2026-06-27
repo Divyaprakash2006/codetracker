@@ -1,6 +1,13 @@
 const mongoose = require('mongoose');
 
 const submissionSchema = new mongoose.Schema({
+  owner: {
+    type: String,
+    required: true,
+    lowercase: true,
+    trim: true,
+    index: true
+  },
   username: {
     type: String,
     required: true,
@@ -18,11 +25,12 @@ const submissionSchema = new mongoose.Schema({
   langName: { type: String, default: '' },
   status: { type: String, default: 'Accepted' },
   timestamp: { type: Date, required: true },
-  submissionId: { type: String, default: '' }
+  submissionId: { type: String, default: '' },
+  code: { type: String, default: null }
 }, { timestamps: true });
 
-// Compound index to avoid duplicate submissions
-submissionSchema.index({ username: 1, submissionId: 1 }, { unique: true, sparse: true });
+// Compound index to avoid duplicate submissions for the same user and owner
+submissionSchema.index({ owner: 1, username: 1, submissionId: 1 }, { unique: true });
 submissionSchema.index({ timestamp: -1 });
 
 module.exports = mongoose.model('Submission', submissionSchema);
