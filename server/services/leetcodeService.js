@@ -319,17 +319,6 @@ const fetchRecentSubmissions = async (username, limit = 20, credentials = {}) =>
       timestamp:    s.timestamp ? new Date(parseInt(s.timestamp) * 1000) : new Date(),
       submissionId: String(s.id || Math.random()),
     }));
-
-    // If LEETCODE_SESSION is provided, fetch code for each submission
-    const LEETCODE_SESSION = credentials.leetcodeSession || process.env.LEETCODE_SESSION;
-    if (LEETCODE_SESSION) {
-      for (const item of resultList) {
-        // Polite small delay to avoid rate limits
-        await new Promise(r => setTimeout(r, 200));
-        item.code = await fetchSubmissionCode(item.submissionId, credentials);
-      }
-    }
-
     return resultList;
   } catch (err) {
     const status = err.response?.status;

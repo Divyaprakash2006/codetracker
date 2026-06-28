@@ -6,14 +6,16 @@ const { fetchUserProfile, fetchRecentSubmissions } = require('../services/leetco
 
 let isRunning = false;
 
-const syncUser = async (username, owner) => {
+const syncUser = async (username, owner, credentials = null) => {
   try {
-    // Load credentials for this owner
-    const account = await Account.findOne({ email: owner.toLowerCase() });
-    const credentials = account ? {
-      leetcodeSession: account.leetcodeSession || null,
-      leetcodeCsrfToken: account.leetcodeCsrfToken || null
-    } : {};
+    if (!credentials) {
+      // Load credentials for this owner
+      const account = await Account.findOne({ email: owner.toLowerCase() });
+      credentials = account ? {
+        leetcodeSession: account.leetcodeSession || null,
+        leetcodeCsrfToken: account.leetcodeCsrfToken || null
+      } : {};
+    }
 
     // 1. Fetch fresh data from LeetCode GraphQL
     const profile     = await fetchUserProfile(username, credentials);
@@ -93,10 +95,21 @@ const startSyncJob = () => {
         return;
       }
 
+      // Fetch all accounts to map owner -> credentials in a single query
+      const accounts = await Account.find({});
+      const credentialsMap = new Map();
+      accounts.forEach(acc => {
+        credentialsMap.set(acc.email.toLowerCase(), {
+          leetcodeSession: acc.leetcodeSession || null,
+          leetcodeCsrfToken: acc.leetcodeCsrfToken || null
+        });
+      });
+
       // Sync users sequentially to avoid rate limiting
       for (const user of users) {
         if (user.username && user.owner) {
-          await syncUser(user.username, user.owner);
+          const creds = credentialsMap.get(user.owner.toLowerCase()) || {};
+          await syncUser(user.username, user.owner, creds);
         }
         // Polite delay between requests to avoid rate limiting
         await new Promise(r => setTimeout(r, 3500));

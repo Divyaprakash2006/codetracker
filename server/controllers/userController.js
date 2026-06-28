@@ -255,22 +255,22 @@ const getLeaderboard = async (req, res) => {
       const start = new Date(startDate);
       const end = new Date(endDate);
 
-      // Query all submissions for this owner and filter in memory to avoid custom indexes
-      const submissions = await Submission.find({ owner });
+      // Query submissions for this owner within the date range directly
+      const submissions = await Submission.find({
+        owner,
+        timestamp: { $gte: start, $lte: end }
+      });
       
       submissions.forEach(sub => {
-        const subTime = new Date(sub.timestamp);
-        if (subTime >= start && subTime <= end) {
-          const uName = sub.username.toLowerCase();
-          if (!periodSolvedMap[uName]) {
-            periodSolvedMap[uName] = { total: 0, easy: 0, medium: 0, hard: 0 };
-          }
-          periodSolvedMap[uName].total++;
-          const diff = sub.difficulty;
-          if (diff === 'Easy') periodSolvedMap[uName].easy++;
-          else if (diff === 'Medium') periodSolvedMap[uName].medium++;
-          else if (diff === 'Hard') periodSolvedMap[uName].hard++;
+        const uName = sub.username.toLowerCase();
+        if (!periodSolvedMap[uName]) {
+          periodSolvedMap[uName] = { total: 0, easy: 0, medium: 0, hard: 0 };
         }
+        periodSolvedMap[uName].total++;
+        const diff = sub.difficulty;
+        if (diff === 'Easy') periodSolvedMap[uName].easy++;
+        else if (diff === 'Medium') periodSolvedMap[uName].medium++;
+        else if (diff === 'Hard') periodSolvedMap[uName].hard++;
       });
     }
 
@@ -371,22 +371,22 @@ const exportReport = async (req, res) => {
       const start = new Date(startDate);
       const end = new Date(endDate);
 
-      // Query all submissions for this owner and filter in memory to avoid custom indexes
-      const submissions = await Submission.find({ owner });
+      // Query submissions for this owner within the date range directly
+      const submissions = await Submission.find({
+        owner,
+        timestamp: { $gte: start, $lte: end }
+      });
       
       submissions.forEach(sub => {
-        const subTime = new Date(sub.timestamp);
-        if (subTime >= start && subTime <= end) {
-          const uName = sub.username.toLowerCase();
-          if (!periodSolvedMap[uName]) {
-            periodSolvedMap[uName] = { total: 0, easy: 0, medium: 0, hard: 0 };
-          }
-          periodSolvedMap[uName].total++;
-          const diff = sub.difficulty;
-          if (diff === 'Easy') periodSolvedMap[uName].easy++;
-          else if (diff === 'Medium') periodSolvedMap[uName].medium++;
-          else if (diff === 'Hard') periodSolvedMap[uName].hard++;
+        const uName = sub.username.toLowerCase();
+        if (!periodSolvedMap[uName]) {
+          periodSolvedMap[uName] = { total: 0, easy: 0, medium: 0, hard: 0 };
         }
+        periodSolvedMap[uName].total++;
+        const diff = sub.difficulty;
+        if (diff === 'Easy') periodSolvedMap[uName].easy++;
+        else if (diff === 'Medium') periodSolvedMap[uName].medium++;
+        else if (diff === 'Hard') periodSolvedMap[uName].hard++;
       });
     }
 

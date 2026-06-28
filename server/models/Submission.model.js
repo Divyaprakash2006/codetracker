@@ -32,5 +32,7 @@ const submissionSchema = new mongoose.Schema({
 // Compound index to avoid duplicate submissions for the same user and owner
 submissionSchema.index({ owner: 1, username: 1, submissionId: 1 }, { unique: true });
 submissionSchema.index({ timestamp: -1 });
+submissionSchema.index({ owner: 1, timestamp: -1 });
+submissionSchema.index({ owner: 1, username: 1, timestamp: -1 });
 
 module.exports = mongoose.model('Submission', submissionSchema);
